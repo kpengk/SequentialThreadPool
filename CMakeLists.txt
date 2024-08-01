@@ -1,6 +1,6 @@
-﻿cmake_minimum_required (VERSION 3.12)
+﻿cmake_minimum_required (VERSION 3.8)
 
-project ("SequentialThreadPool")
+project (SequentialThreadPool VERSION 0.0.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,5 +10,5 @@ if (MSVC)
     string(APPEND CMAKE_CXX_FLAGS " /Zc:__cplusplus")
 endif ()
 
-file(GLOB SRC_FILES *.hpp *.cpp)
-add_executable (SequentialThreadPool ${SRC_FILES})
+add_subdirectory(example)
+add_subdirectory(test)

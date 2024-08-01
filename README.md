@@ -1,6 +1,6 @@
 # SequentialThreadPool
 
-A C++11 thread pool in which tasks in the same group are executed in the order they are queued.
+A header-only thread pool in which tasks in the same group are executed in the order they are queued.
 
 Basic usage:
 
