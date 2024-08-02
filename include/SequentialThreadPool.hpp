@@ -39,7 +39,7 @@ public:
                 throw std::runtime_error("enqueue on stopped thread pool");
             }
             waiting = group_tasks_[group].empty();
-            group_tasks_[group].emplace([task]() { (*task)(); });
+            group_tasks_[group].emplace([task = std::move(task)]() { (*task)(); });
             if (waiting) {
                 runnable_group_.push(group);
             }

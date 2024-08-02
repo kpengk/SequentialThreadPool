@@ -22,6 +22,22 @@ TEST_CASE("Testing return values") {
     CHECK(res.get() == a + b);
 }
 
+TEST_CASE("Testing parameter passing") {
+    SequentialThreadPool pool(1);
+    std::vector<char> vec1(8);
+    std::vector<char> vec2(8);
+    std::vector<char> vec3(8);
+    const char* ptr1 = vec1.data();
+    const char* ptr2 = vec2.data();
+    const char* ptr3 = vec3.data();
+    std::future<const char*> res1 = pool.enqueue(0, [](const std::vector<char>& vec) { return vec.data(); }, vec1);
+    std::future<const char*> res2 = pool.enqueue(1, [](const std::vector<char>& vec) { return vec.data(); }, std::ref(vec2));
+    std::future<const char*> res3 = pool.enqueue(2, [](const std::vector<char>& vec) { return vec.data(); }, std::move(vec3));
+    CHECK(res1.get() != ptr1);
+    CHECK(res2.get() == ptr2);
+    CHECK(res3.get() == ptr3);
+}
+
 
 TEST_CASE("test execution order") {
     constexpr int thread_count = 4;
