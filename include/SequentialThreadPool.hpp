@@ -22,7 +22,8 @@ public:
         wait_for_done();
     }
 
-    template <typename T, typename std::enable_if<std::is_same_v<decltype(std::declval<T>()()), TaskReply>>::type* = nullptr>
+    template <typename T,
+        typename std::enable_if<std::is_same<decltype(std::declval<T>()()), TaskReply>::value>::type* = nullptr>
     void post(uint32_t group, T&& task) {
         bool waiting{};
         {
@@ -41,7 +42,8 @@ public:
         }
     }
 
-    template <typename T, typename std::enable_if<std::is_same_v<decltype(std::declval<T>()()), void>>::type* = nullptr>
+    template <typename T,
+        typename std::enable_if<std::is_same<decltype(std::declval<T>()()), void>::value>::type* = nullptr>
     void post(uint32_t group, T&& task) {
         post(group, [task = std::forward<T>(task)]() {
             task();
