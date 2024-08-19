@@ -11,6 +11,10 @@ void print_group(int count) {
     std::cout << std::endl;
 }
 
+int add(int) {
+    return 1;
+}
+
 void print_task(int group, int task) {
     const auto task_str = std::to_string(task);
     const int space_count = 4 * (group + 1) - task_str.size();
@@ -29,7 +33,7 @@ int main() {
     SequentialThreadPool pool(4);
     for (int task = 0; task < 30; ++task) {
         const int group = task % 5; // Task Grouping
-        pool.enqueue(group, [=]() {
+        pool.post(group, [=]() {
             const int sleep = task == 0 ? 200 : rand() % 100 + 50;
 #if 1
             print_task(group, task);

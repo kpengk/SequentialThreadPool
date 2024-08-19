@@ -1,12 +1,14 @@
 ﻿#pragma once
 #include <functional>
-#include <future>
 #include <mutex>
 #include <queue>
 #include <stdexcept>
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+
+enum class TaskReply { done, retry };
 
 class SequentialThreadPool {
 public:
@@ -20,18 +22,8 @@ public:
         wait_for_done();
     }
 
-    template <typename F, typename... Args>
-#if __cplusplus < 201703
-    auto enqueue(uint32_t group, F&& f, Args&&... args) -> std::future<typename std::result_of<F(Args...)>::type> {
-        using result_type = typename std::result_of<F(Args...)>::type;
-#else
-    auto enqueue(uint32_t group, F&& f, Args&&... args) -> std::future<std::invoke_result_t<F, Args...>> {
-        using result_type = std::invoke_result_t<F, Args...>;
-#endif
-        auto task = std::make_shared<std::packaged_task<result_type()>>(
-            std::bind(std::forward<F>(f), std::forward<Args>(args)...));
-        std::future<result_type> res = task->get_future();
-
+    template <typename T, std::enable_if_t<std::is_same_v<decltype(std::declval<T>()()), TaskReply>>* = nullptr>
+    void post(uint32_t group, T&& task) {
         bool waiting{};
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -39,7 +31,7 @@ public:
                 throw std::runtime_error("enqueue on stopped thread pool");
             }
             waiting = group_tasks_[group].empty();
-            group_tasks_[group].emplace([task = std::move(task)]() { (*task)(); });
+            group_tasks_[group].emplace(std::forward<T>(task));
             if (waiting) {
                 runnable_group_.push(group);
             }
@@ -47,7 +39,14 @@ public:
         if (waiting) {
             condition_.notify_one();
         }
-        return res;
+    }
+
+    template <typename T, std::enable_if_t<std::is_same_v<decltype(std::declval<T>()()), void>>* = nullptr>
+    void post(uint32_t group, T&& task) {
+        post(group, [task = std::forward<T>(task)]() {
+            task();
+            return TaskReply::done;
+        });
     }
 
     size_t task_size() const {
@@ -75,7 +74,7 @@ private:
     void run() {
         while (true) {
             uint32_t group{};
-            std::function<void()> task{};
+            std::function<TaskReply()> task{};
 
             {
                 std::unique_lock<std::mutex> lock(mutex_);
@@ -85,15 +84,17 @@ private:
                 }
                 group = runnable_group_.front();
                 runnable_group_.pop();
-                task = std::move(group_tasks_[group].front());
+                task = group_tasks_[group].front();
             }
 
-            task();
+            const TaskReply reply = task();
 
             bool notify{};
             {
                 std::lock_guard<std::mutex> lock(mutex_);
-                group_tasks_[group].pop();
+                if (reply == TaskReply::done) {
+                    group_tasks_[group].pop();
+                }
                 if (!group_tasks_[group].empty()) {
                     runnable_group_.push(group);
                     notify = true;
@@ -106,7 +107,7 @@ private:
     }
 
     std::vector<std::thread> workers_;
-    std::unordered_map<uint32_t, std::queue<std::function<void()>>> group_tasks_;
+    std::unordered_map<uint32_t, std::queue<std::function<TaskReply()>>> group_tasks_;
     std::queue<uint32_t> runnable_group_;
     mutable std::mutex mutex_;
     std::condition_variable condition_;

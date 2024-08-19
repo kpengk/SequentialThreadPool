@@ -15,7 +15,7 @@ int main() {
     SequentialThreadPool pool(4);
     for (int task = 0; task < 30; ++task) {
         const int group = task % 5; // Task Grouping
-        pool.enqueue(group, [=]() {
+        pool.post(group, [=]() {
             const auto end = std::chrono::high_resolution_clock::now();
             const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
             const int sleep = task == 0 ? 200 : rand() % 100 + 50;
