@@ -29,6 +29,9 @@ TEST_CASE("Testing supported return type") {
     pool.post(0, std::function<void()>(ret_reply_fun));
     pool.post(0, []() {});
     pool.post(0, []() -> TaskReply { return TaskReply::done; });
+
+    int val{};
+    pool.post(0, [val]() mutable { ++val; });
 }
 
 TEST_CASE("Testing retry") {
