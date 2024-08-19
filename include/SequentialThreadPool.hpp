@@ -1,9 +1,12 @@
 ﻿#pragma once
+#include <condition_variable>
+#include <cstdint>
 #include <functional>
 #include <mutex>
 #include <queue>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
