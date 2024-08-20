@@ -37,7 +37,7 @@ public:
             waiting = group_tasks_[group].empty();
             group_tasks_[group].emplace(std::forward<T>(task));
             if (waiting) {
-                runnable_group_.push(group);
+                ready_group_.push(group);
             }
         }
         if (waiting) {
@@ -78,34 +78,25 @@ public:
 private:
     void run() {
         while (true) {
-            uint32_t group{};
-            std::function<TaskReply()> task{};
-
-            {
-                std::unique_lock<std::mutex> lock(mutex_);
-                condition_.wait(lock, [this]() { return !runnable_group_.empty() || stop_token_; });
-                if (runnable_group_.empty() && stop_token_) {
-                    return;
-                }
-                group = runnable_group_.front();
-                runnable_group_.pop();
-                task = group_tasks_[group].front();
+            std::unique_lock<std::mutex> lock(mutex_);
+            condition_.wait(lock, [this]() { return !ready_group_.empty() || stop_token_; });
+            if (ready_group_.empty() && stop_token_) {
+                return;
             }
+            const uint32_t group = ready_group_.front();
+            ready_group_.pop();
+            const std::function<TaskReply()>& task = group_tasks_[group].front();
+            lock.unlock();
 
             const TaskReply reply = task();
 
-            bool notify{};
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                if (reply == TaskReply::done) {
-                    group_tasks_[group].pop();
-                }
-                if (!group_tasks_[group].empty()) {
-                    runnable_group_.push(group);
-                    notify = true;
-                }
+            lock.lock();
+            if (reply == TaskReply::done) {
+                group_tasks_[group].pop();
             }
-            if (notify) {
+            if (!group_tasks_[group].empty()) {
+                ready_group_.push(group);
+                lock.unlock();
                 condition_.notify_one();
             }
         }
@@ -113,7 +104,7 @@ private:
 
     std::vector<std::thread> workers_;
     std::unordered_map<uint32_t, std::queue<std::function<TaskReply()>>> group_tasks_;
-    std::queue<uint32_t> runnable_group_;
+    std::queue<uint32_t> ready_group_;
     mutable std::mutex mutex_;
     std::condition_variable condition_;
     bool stop_token_;

@@ -34,6 +34,35 @@ TEST_CASE("Testing supported return type") {
     pool.post(0, [val]() mutable { ++val; });
 }
 
+TEST_CASE("Testing retry parameter passing") {
+    std::vector<int> vec{1, 2, 3, 4, 5, 6, 7, 8};
+    const int* ptr = vec.data();
+
+    SequentialThreadPool pool(1);
+    pool.post(0, [obj = std::move(vec), ptr]() mutable {
+        static int count{};
+        static std::vector<int> temp;
+        ++count;
+
+        if (count <= 3) {
+            CHECK(obj.data() == ptr);
+            CHECK(obj.size() == 8);
+            return TaskReply::retry;
+        } else if (count == 4) {
+            CHECK(obj.data()  == ptr);
+            CHECK(obj.size() == 8);
+            temp = std::move(obj);
+            CHECK(obj.data() == nullptr);
+            CHECK(obj.size() == 0);
+            return TaskReply::retry;
+        } else {
+            CHECK(obj.data() == nullptr);
+            CHECK(obj.size() == 0);
+            return TaskReply::done;
+        }
+    });
+}
+
 TEST_CASE("Testing retry") {
     SequentialThreadPool pool(2);
     int count0{};
