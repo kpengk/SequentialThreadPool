@@ -1,16 +1,18 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 #include "SequentialThreadPool.hpp"
+#include <chrono>
 
-void high_precision_sleep(int microsec) {
+std::uint64_t high_precision_sleep(int microsec) {
     const auto start = std::chrono::high_resolution_clock::now();
     while (true) {
         const auto now = std::chrono::high_resolution_clock::now();
         const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - start).count();
         if (elapsed >= microsec) {
-            break;
+            return elapsed;
         }
     }
+    return 0;
 }
 
 void ret_void_fun(){}
@@ -138,4 +140,30 @@ TEST_CASE("test execution order") {
             CHECK(tasks[i] == group_count * i + group);
         }
     }
+}
+
+TEST_CASE("test execution time") {
+    constexpr int thread_count = 2;
+    constexpr int group_count = 2;
+    constexpr int group_task_count = 5000;
+    // Execution result task number
+    std::atomic_uint64_t value{0};
+
+    // Add tasks in groups
+    SequentialThreadPool pool(thread_count);
+    const auto start = std::chrono::high_resolution_clock::now();
+    for (int task = 0; task < group_count * group_task_count; ++task) {
+        const int remains = task % (group_count + 1);
+        const int group = remains >= group_count ? 0 : remains;
+        pool.post(group, [&value]() {
+            const int sleep = 1000 + rand() % 200;
+            const auto real = high_precision_sleep(sleep);
+            value.fetch_add(real, std::memory_order_release);
+        });
+    }
+
+    pool.wait_for_done();
+    const auto now = std::chrono::high_resolution_clock::now();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
+    std::cout << "time:" << elapsed << "ms, task time sum: " << value.load(std::memory_order_acquire) / 1000.0F << "ms\n";
 }
