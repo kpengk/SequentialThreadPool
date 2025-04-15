@@ -54,6 +54,12 @@ public:
         });
     }
 
+    size_t task_size(uint32_t group) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto iter = group_tasks_.find(group);
+        return iter != group_tasks_.cend() ? iter->second.size() : 0;
+    }
+
     size_t task_size() const {
         std::lock_guard<std::mutex> lock(mutex_);
         size_t count{};
