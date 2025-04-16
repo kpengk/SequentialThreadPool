@@ -18,7 +18,7 @@ int add(int) {
 
 void print_task(int group, int task) {
     const auto task_str = std::to_string(task);
-    const int space_count = 4 * (group + 1) - task_str.size();
+    const size_t space_count = 4 * (group + 1) - task_str.size();
     std::string str;
     str.reserve(space_count + task_str.size() + 1);
     str.resize(space_count, ' ');

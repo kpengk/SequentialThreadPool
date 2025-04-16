@@ -66,42 +66,54 @@ TEST_CASE("Testing retry parameter passing") {
 }
 
 TEST_CASE("Testing retry") {
-    SequentialThreadPool pool(2);
+    SequentialThreadPool pool(4);
+
+    std::mutex mtx0;
     int count0{};
-    int count1{};
-    int count2{};
     std::vector<int> task0_exec;
-    std::vector<int> task1_exec;
-    std::vector<int> task2_exec;
+    task0_exec.reserve(2000);
     pool.post(0, [&]() {
-        task0_exec.push_back(count0);
         high_precision_sleep(100);
-        return ++count0 < 20 ? TaskReply::retry : TaskReply::done;
+        std::lock_guard<std::mutex> lk(mtx0);
+        task0_exec.push_back(count0);
+        return ++count0 < 2000 ? TaskReply::retry : TaskReply::done;
     });
+
+    std::mutex mtx1;
+    int count1{};
+    std::vector<int> task1_exec;
+    task1_exec.reserve(1000);
     pool.post(1, [&]() {
-        task1_exec.push_back(count1);
         high_precision_sleep(200);
-        return ++count1 < 10 ? TaskReply::retry : TaskReply::done;
+        std::lock_guard<std::mutex> lk(mtx1);
+        task1_exec.push_back(count1);
+        return ++count1 < 1000 ? TaskReply::retry : TaskReply::done;
     });
-    for (int i = 0; i < 1000; ++i) {
+
+    std::mutex mtx2;
+    int count2{};
+    std::vector<int> task2_exec;
+    task2_exec.reserve(5000);
+    for (int i = 0; i < 5000; ++i) {
         pool.post(2, [&]() {
-            task2_exec.push_back(count2++);
             high_precision_sleep(10);
+            std::lock_guard<std::mutex> lk(mtx2);
+            task2_exec.push_back(count2++);
         });
     }
     pool.wait_for_done();
 
-    CHECK(task0_exec.size() == 20);
+    CHECK(task0_exec.size() == 2000);
     for (int i = 0; i < task0_exec.size(); ++i) {
         CHECK(task0_exec[i] == i);
     }
 
-    CHECK(task1_exec.size() == 10);
+    CHECK(task1_exec.size() == 1000);
     for (int i = 0; i < task1_exec.size(); ++i) {
         CHECK(task1_exec[i] == i);
     }
 
-    CHECK(task2_exec.size() == 1000);
+    CHECK(task2_exec.size() == 5000);
     for (int i = 0; i < task2_exec.size(); ++i) {
         CHECK(task2_exec[i] == i);
     }
@@ -122,9 +134,10 @@ TEST_CASE("test execution order") {
     SequentialThreadPool pool(thread_count);
     for (int task = 0; task < group_count * group_task_count; ++task) {
         const int group = task % group_count;
-        pool.post(group, [group, task, &executed_tasks, &mtx]() {
+        pool.post(group, [group, task, &executed_tasks, &mtx](TaskContext* ctx) {
             const int sleep = task == 0 ? 200 : rand() % 100;
             high_precision_sleep(sleep);
+            ctx->wait_previous();
             std::lock_guard<std::mutex> lock(mtx);
             executed_tasks[group].push_back(task);
         });
@@ -143,7 +156,7 @@ TEST_CASE("test execution order") {
 }
 
 TEST_CASE("test execution time") {
-    constexpr int thread_count = 2;
+    constexpr int thread_count = 4;
     constexpr int group_count = 2;
     constexpr int group_task_count = 5000;
     // Execution result task number
@@ -155,9 +168,10 @@ TEST_CASE("test execution time") {
     for (int task = 0; task < group_count * group_task_count; ++task) {
         const int remains = task % (group_count + 1);
         const int group = remains >= group_count ? 0 : remains;
-        pool.post(group, [&value]() {
+        pool.post(group, [&value](TaskContext* ctx) {
             const int sleep = 1000 + rand() % 200;
             const auto real = high_precision_sleep(sleep);
+            ctx->wait_previous();
             value.fetch_add(real, std::memory_order_release);
         });
     }

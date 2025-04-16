@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <mutex>
 #include <queue>
@@ -12,10 +13,27 @@
 
 
 enum class TaskReply { done, retry };
+class SequentialThreadPool;
+
+class TaskContext {
+public:
+    TaskContext(SequentialThreadPool* pool, uint32_t group, uint32_t id)
+        : pool_{pool}, group_{group}, id_{id}, waited_{false} {}
+    ~TaskContext();
+    inline uint32_t group() const { return group_; }
+    inline uint32_t id() const { return id_; }
+    void wait_previous();
+
+private:
+    SequentialThreadPool* pool_;
+    const uint32_t group_;
+    const uint32_t id_;
+    bool waited_;
+};
 
 class SequentialThreadPool {
 public:
-    explicit SequentialThreadPool(size_t threads) : stop_token_{} {
+    explicit SequentialThreadPool(size_t threads) : task_id_{}, stop_token_{} {
         for (size_t i = 0; i < threads; ++i) {
             workers_.emplace_back([this]() { run(); });
         }
@@ -25,8 +43,9 @@ public:
         wait_for_done();
     }
 
+    // @brief Task param TaskContext*, task return TaskReply.
     template <typename T,
-        typename std::enable_if<std::is_same<decltype(std::declval<T>()()), TaskReply>::value>::type* = nullptr>
+        typename std::enable_if<std::is_same<decltype(std::declval<T>()({})), TaskReply>::value>::type* = nullptr>
     void post(uint32_t group, T&& task) {
         bool waiting{};
         {
@@ -35,7 +54,8 @@ public:
                 throw std::runtime_error("enqueue on stopped thread pool");
             }
             waiting = group_tasks_[group].empty();
-            group_tasks_[group].emplace(std::forward<T>(task));
+            group_tasks_[group].emplace_back(Task{task_id_, false, std::forward<T>(task)});
+            ++task_id_;
             if (waiting) {
                 ready_group_.push(group);
             }
@@ -45,10 +65,28 @@ public:
         }
     }
 
+    // @brief Task param void, task return TaskReply.
+    template <typename T,
+        typename std::enable_if<std::is_same<decltype(std::declval<T>()()), TaskReply>::value>::type* = nullptr>
+    void post(uint32_t group, T&& task) {
+        post(group, [task = std::forward<T>(task)](TaskContext*) mutable -> TaskReply { return task(); });
+    }
+
+    // @brief Task param TaskContext*, task return void.
+    template <typename T,
+        typename std::enable_if<std::is_same<decltype(std::declval<T>()({})), void>::value>::type* = nullptr>
+    void post(uint32_t group, T&& task) {
+        post(group, [task = std::forward<T>(task)](TaskContext* ctx) mutable -> TaskReply {
+            task(ctx);
+            return TaskReply::done;
+        });
+    }
+
+    // @brief Task param void, task return void.
     template <typename T,
         typename std::enable_if<std::is_same<decltype(std::declval<T>()()), void>::value>::type* = nullptr>
     void post(uint32_t group, T&& task) {
-        post(group, [task = std::forward<T>(task)]() mutable {
+        post(group, [task = std::forward<T>(task)](TaskContext*) mutable -> TaskReply {
             task();
             return TaskReply::done;
         });
@@ -87,31 +125,77 @@ private:
             std::unique_lock<std::mutex> lock(mutex_);
             condition_.wait(lock, [this]() { return !ready_group_.empty() || stop_token_; });
             if (ready_group_.empty() && stop_token_) {
-                return;
+                break;
             }
             const uint32_t group = ready_group_.front();
             ready_group_.pop();
-            const std::function<TaskReply()>& task = group_tasks_[group].front();
-            lock.unlock();
-
-            const TaskReply reply = task();
-
-            lock.lock();
-            if (reply == TaskReply::done) {
-                group_tasks_[group].pop();
-            }
-            if (!group_tasks_[group].empty()) {
+            const auto task_iter = std::find_if(
+                group_tasks_[group].begin(), group_tasks_[group].end(), [](const Task& task) { return !task.running; });
+            task_iter->running = true;
+            if (task_iter + 1 != group_tasks_[group].cend()) {
                 ready_group_.push(group);
                 lock.unlock();
                 condition_.notify_one();
+            } else {
+                lock.unlock();
+            }
+
+            TaskContext ctx{this, group, task_iter->id};
+            const TaskReply reply = task_iter->f(&ctx);
+
+            if (reply == TaskReply::done) {
+                ctx.wait_previous();
+                lock.lock();
+                group_tasks_[group].pop_front();
+                lock.unlock();
+                condition_.notify_all();
+            } else {
+                lock.lock();
+                task_iter->running = false;
+                ready_group_.push(group);
+                lock.unlock();
             }
         }
     }
 
+    void wait_previous(uint32_t group, uint32_t task) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        condition_.wait(lock, [&]() {
+            if (group_tasks_[group].empty()) {
+                return true;
+            }
+            const uint32_t val = group_tasks_[group].front().id;
+            if (val != task) {
+                return false;
+            }
+            return group_tasks_[group].front().id == task;
+        });
+    }
+
+    friend class TaskContext;
+    struct Task {
+        uint32_t id{};
+        bool running{};
+        std::function<TaskReply(TaskContext*)> f;
+    };
+
     std::vector<std::thread> workers_;
-    std::unordered_map<uint32_t, std::queue<std::function<TaskReply()>>> group_tasks_;
+    std::unordered_map<uint32_t, std::deque<Task>> group_tasks_;
     std::queue<uint32_t> ready_group_;
     mutable std::mutex mutex_;
     std::condition_variable condition_;
+    std::uint32_t task_id_;
     bool stop_token_;
 };
+
+
+inline TaskContext::~TaskContext() {
+    wait_previous();
+}
+
+inline void TaskContext::wait_previous() {
+    if (!waited_) {
+        pool_->wait_previous(group_, id_);
+    }
+    waited_ = true;
+}
