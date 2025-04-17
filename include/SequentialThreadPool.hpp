@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include <algorithm>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -15,17 +16,21 @@
 enum class TaskReply { done, retry };
 class SequentialThreadPool;
 
+// @brief TaskContext is used to pass the task group and id to the task.
 class TaskContext {
 public:
-    TaskContext(SequentialThreadPool* pool, uint32_t group, uint32_t id)
-        : pool_{pool}, group_{group}, id_{id}, waited_{false} {}
+    TaskContext(SequentialThreadPool* pool, uint32_t group, uint32_t id);
     ~TaskContext();
-    inline uint32_t group() const { return group_; }
-    inline uint32_t id() const { return id_; }
+    TaskContext(const TaskContext&) = delete;
+    TaskContext(TaskContext&&) = delete;
+    TaskContext& operator=(const TaskContext&) = delete;
+    TaskContext& operator=(TaskContext&&) = delete;
+    uint32_t group() const;
+    uint32_t id() const;
     void wait_previous();
 
 private:
-    SequentialThreadPool* pool_;
+    SequentialThreadPool* const pool_;
     const uint32_t group_;
     const uint32_t id_;
     bool waited_;
@@ -42,6 +47,11 @@ public:
     ~SequentialThreadPool() {
         wait_for_done();
     }
+
+    SequentialThreadPool(const SequentialThreadPool&) = delete;
+    SequentialThreadPool(SequentialThreadPool&&) = delete;
+    SequentialThreadPool& operator=(const SequentialThreadPool&) = delete;
+    SequentialThreadPool& operator=(SequentialThreadPool&&) = delete;
 
     // @brief Task param TaskContext*, task return TaskReply.
     template <typename T,
@@ -140,7 +150,7 @@ private:
                 lock.unlock();
             }
 
-            TaskContext ctx{this, group, task_iter->id};
+            TaskContext ctx(this, group, task_iter->id);
             const TaskReply reply = task_iter->f(&ctx);
 
             if (reply == TaskReply::done) {
@@ -189,8 +199,19 @@ private:
 };
 
 
+inline TaskContext::TaskContext(SequentialThreadPool* pool, uint32_t group, uint32_t id)
+    : pool_{pool}, group_{group}, id_{id}, waited_{false} {}
+
 inline TaskContext::~TaskContext() {
     wait_previous();
+}
+
+inline uint32_t TaskContext::group() const {
+    return group_;
+}
+
+inline uint32_t TaskContext::id() const {
+    return id_;
 }
 
 inline void TaskContext::wait_previous() {
