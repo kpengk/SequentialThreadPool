@@ -6,7 +6,6 @@
 #include <deque>
 #include <functional>
 #include <mutex>
-#include <queue>
 #include <stdexcept>
 #include <thread>
 #include <type_traits>
@@ -64,13 +63,13 @@ public:
             if (stop_token_) {
                 throw std::runtime_error("enqueue on stopped thread pool");
             }
-            waiting = std::all_of(group_tasks_[group].cbegin(), group_tasks_[group].cend(),
-                [](const Task& task) { return task.status != TaskStatus::wait; });
+            waiting = std::all_of(
+                ready_group_.cbegin(), ready_group_.cend(), [&](const uint32_t& val) { return val != group; });
             group_tasks_[group].emplace_back(
                 Task{task_id_, waiting ? TaskStatus::ready : TaskStatus::wait, std::forward<T>(task)});
             ++task_id_;
             if (waiting) {
-                ready_group_.push(group);
+                ready_group_.push_back(group);
             }
         }
         if (waiting) {
@@ -142,7 +141,7 @@ private:
             }
             // Pull tasks from task group.
             const uint32_t group = ready_group_.front();
-            ready_group_.pop();
+            ready_group_.pop_front();
             const auto task_iter = std::find_if(group_tasks_[group].begin(), group_tasks_[group].end(),
                 [](const Task& task) { return task.status != TaskStatus::running; });
             assert(task_iter != group_tasks_[group].end());
@@ -154,7 +153,7 @@ private:
                 [](const Task& task) { return task.status == TaskStatus::wait; });
             if (wait_iter != group_tasks_[group].end()) {
                 wait_iter->status = TaskStatus::ready;
-                ready_group_.push(group);
+                ready_group_.push_back(group);
                 lock.unlock();
                 condition_.notify_one();
             } else {
@@ -174,7 +173,7 @@ private:
             } else {
                 lock.lock();
                 task.status = TaskStatus::ready;
-                ready_group_.push(group);
+                ready_group_.push_back(group);
                 lock.unlock();
                 // No "notify_one()" is needed here, because the current thread
                 // will immediately check whether "ready_group_" is empty.
@@ -208,7 +207,7 @@ private:
 
     std::vector<std::thread> workers_;
     std::unordered_map<uint32_t, std::deque<Task>> group_tasks_;
-    std::queue<uint32_t> ready_group_;
+    std::deque<uint32_t> ready_group_;
     mutable std::mutex mutex_;
     std::condition_variable condition_;
     std::uint32_t task_id_;

@@ -211,7 +211,7 @@ TEST_CASE("test_scheduling_time") {
     SequentialThreadPool pool(thread_count);
     const auto start = std::chrono::high_resolution_clock::now();
     for (int task = 0; task < group_count * group_task_count; ++task) {
-        const int remains = task % (group_count + 1);
+        const int remains = task % group_count;
         const int group = remains >= group_count ? 0 : remains;
         pool.post(group, [&value](TaskContext* ctx) {
             ctx->wait_previous();
