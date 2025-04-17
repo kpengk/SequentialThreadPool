@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include "doctest/doctest.h"
 #include "SequentialThreadPool.hpp"
+#include "doctest/doctest.h"
+
 #include <chrono>
 
 std::uint64_t high_precision_sleep(int microsec) {
@@ -15,13 +16,13 @@ std::uint64_t high_precision_sleep(int microsec) {
     return 0;
 }
 
-void ret_void_fun(){}
+void ret_void_fun() {}
 
 TaskReply ret_reply_fun() {
     return TaskReply{};
 }
 
-TEST_CASE("Testing supported return type") {
+TEST_CASE("test_supported_return_type") {
     SequentialThreadPool pool(1);
     pool.post(0, ret_void_fun);
     pool.post(0, ret_reply_fun);
@@ -36,7 +37,7 @@ TEST_CASE("Testing supported return type") {
     pool.post(0, [val]() mutable { ++val; });
 }
 
-TEST_CASE("Testing retry parameter passing") {
+TEST_CASE("test_retry_parameter_passing") {
     std::vector<int> vec{1, 2, 3, 4, 5, 6, 7, 8};
     const int* ptr = vec.data();
 
@@ -51,7 +52,7 @@ TEST_CASE("Testing retry parameter passing") {
             CHECK(obj.size() == 8);
             return TaskReply::retry;
         } else if (count == 4) {
-            CHECK(obj.data()  == ptr);
+            CHECK(obj.data() == ptr);
             CHECK(obj.size() == 8);
             temp = std::move(obj);
             CHECK(obj.data() == nullptr);
@@ -65,7 +66,23 @@ TEST_CASE("Testing retry parameter passing") {
     });
 }
 
-TEST_CASE("Testing retry") {
+TEST_CASE("test_partial_task_retry") {
+    SequentialThreadPool pool(2);
+    int count0{};
+    pool.post(0, [&]() {
+        high_precision_sleep(100);
+        return ++count0 < 5 ? TaskReply::retry : TaskReply::done;
+    });
+    for (int i = 0; i < 10; ++i) {
+        pool.post(0, [&]() {
+            high_precision_sleep(200);
+            return TaskReply::done;
+        });
+    }
+    pool.wait_for_done();
+}
+
+TEST_CASE("test_all_task_retry") {
     SequentialThreadPool pool(4);
 
     std::mutex mtx0;
@@ -119,7 +136,7 @@ TEST_CASE("Testing retry") {
     }
 }
 
-TEST_CASE("test execution order") {
+TEST_CASE("test_execution_order") {
     constexpr int thread_count = 4;
     constexpr int group_count = 10;
     constexpr int group_task_count = 2000;
@@ -155,7 +172,7 @@ TEST_CASE("test execution order") {
     }
 }
 
-TEST_CASE("test execution time") {
+TEST_CASE("test_execution_time") {
     constexpr int thread_count = 4;
     constexpr int group_count = 2;
     constexpr int group_task_count = 5000;
@@ -178,6 +195,32 @@ TEST_CASE("test execution time") {
 
     pool.wait_for_done();
     const auto now = std::chrono::high_resolution_clock::now();
+    const int64_t elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
+    const float task_time = value.load(std::memory_order_acquire) / 1000.0F;
+    std::cout << "Execution time:" << elapsed << "ms, task time sum: " << task_time << "ms.\n";
+}
+
+TEST_CASE("test_scheduling_time") {
+    constexpr int thread_count = 4;
+    constexpr int group_count = 50;
+    constexpr int group_task_count = 20000;
+    // Execution result task number.
+    std::atomic_uint64_t value{0};
+
+    // Add tasks in groups.
+    SequentialThreadPool pool(thread_count);
+    const auto start = std::chrono::high_resolution_clock::now();
+    for (int task = 0; task < group_count * group_task_count; ++task) {
+        const int remains = task % (group_count + 1);
+        const int group = remains >= group_count ? 0 : remains;
+        pool.post(group, [&value](TaskContext* ctx) {
+            ctx->wait_previous();
+            value.fetch_add(1, std::memory_order_release);
+        });
+    }
+
+    pool.wait_for_done();
+    const auto now = std::chrono::high_resolution_clock::now();
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
-    std::cout << "time:" << elapsed << "ms, task time sum: " << value.load(std::memory_order_acquire) / 1000.0F << "ms\n";
+    std::cout << "Scheduling time:" << elapsed << "ms, task count: " << value.load(std::memory_order_acquire) << ".\n";
 }

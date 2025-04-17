@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include <algorithm>
+#include <cassert>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -57,14 +58,16 @@ public:
     template <typename T,
         typename std::enable_if<std::is_same<decltype(std::declval<T>()({})), TaskReply>::value>::type* = nullptr>
     void post(uint32_t group, T&& task) {
-        bool waiting{};
+        bool waiting{}; // The task group is waiting for new tasks
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (stop_token_) {
                 throw std::runtime_error("enqueue on stopped thread pool");
             }
-            waiting = group_tasks_[group].empty();
-            group_tasks_[group].emplace_back(Task{task_id_, false, std::forward<T>(task)});
+            waiting = std::all_of(group_tasks_[group].cbegin(), group_tasks_[group].cend(),
+                [](const Task& task) { return task.status != TaskStatus::wait; });
+            group_tasks_[group].emplace_back(
+                Task{task_id_, waiting ? TaskStatus::ready : TaskStatus::wait, std::forward<T>(task)});
             ++task_id_;
             if (waiting) {
                 ready_group_.push(group);
@@ -137,33 +140,44 @@ private:
             if (ready_group_.empty() && stop_token_) {
                 break;
             }
+            // Pull tasks from task group.
             const uint32_t group = ready_group_.front();
             ready_group_.pop();
-            const auto task_iter = std::find_if(
-                group_tasks_[group].begin(), group_tasks_[group].end(), [](const Task& task) { return !task.running; });
-            task_iter->running = true;
-            if (task_iter + 1 != group_tasks_[group].cend()) {
+            const auto task_iter = std::find_if(group_tasks_[group].begin(), group_tasks_[group].end(),
+                [](const Task& task) { return task.status != TaskStatus::running; });
+            assert(task_iter != group_tasks_[group].end());
+            Task& task = *task_iter;
+            assert(task.status == TaskStatus::ready);
+            task.status = TaskStatus::running;
+            // Add the current group of tasks to the ready queue.
+            const auto wait_iter = std::find_if(task_iter + 1, group_tasks_[group].end(),
+                [](const Task& task) { return task.status == TaskStatus::wait; });
+            if (wait_iter != group_tasks_[group].end()) {
+                wait_iter->status = TaskStatus::ready;
                 ready_group_.push(group);
                 lock.unlock();
                 condition_.notify_one();
             } else {
                 lock.unlock();
             }
-
-            TaskContext ctx(this, group, task_iter->id);
-            const TaskReply reply = task_iter->f(&ctx);
-
+            // Execute the task.
+            TaskContext ctx(this, group, task.id);
+            const TaskReply reply = task.f(&ctx);
+            // Check if the result needs to be retried.
             if (reply == TaskReply::done) {
                 ctx.wait_previous();
                 lock.lock();
                 group_tasks_[group].pop_front();
                 lock.unlock();
+                // Notify all threads, that some threads are waiting for the previous task to complete.
                 condition_.notify_all();
             } else {
                 lock.lock();
-                task_iter->running = false;
+                task.status = TaskStatus::ready;
                 ready_group_.push(group);
                 lock.unlock();
+                // No "notify_one()" is needed here, because the current thread
+                // will immediately check whether "ready_group_" is empty.
             }
         }
     }
@@ -183,9 +197,12 @@ private:
     }
 
     friend class TaskContext;
+
+    enum class TaskStatus { wait, ready, running };
+
     struct Task {
         uint32_t id{};
-        bool running{};
+        TaskStatus status{};
         std::function<TaskReply(TaskContext*)> f;
     };
 
